@@ -427,6 +427,9 @@ async def map_page():
             value=devices[0].id if devices else None,
         ).classes("w-64 q-mb-md")
 
+        # Day navigation state
+        today = datetime.date.today()
+        day_state = {"date": today}
         map_container = ui.column().classes("w-full")
 
         def refresh_devices():
@@ -444,23 +447,31 @@ async def map_page():
                 with map_container:
                     ui.label("No location data available.").classes("text-grey")
                 return
+
+            tz_name = app.storage.user.get("timezone", "UTC")
+            try:
+                tz = ZoneInfo(tz_name)
+            except KeyError:
+                tz = ZoneInfo("UTC")
+
+            # Convert selected day to UTC range
+            local_start = datetime.datetime.combine(day_state["date"], datetime.time.min, tzinfo=tz)
+            local_end = local_start + datetime.timedelta(days=1)
+            utc_start = local_start.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+            utc_end = local_end.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
             inner_db = SessionLocal()
             locations = (
                 inner_db.query(Location)
-                .filter(Location.device_id == selected_device.value)
-                .order_by(Location.timestamp.desc())
-                .limit(500)
+                .filter(
+                    Location.device_id == selected_device.value,
+                    Location.timestamp >= utc_start,
+                    Location.timestamp < utc_end,
+                )
+                .order_by(Location.timestamp.asc())
                 .all()
             )
 
-            if not locations:
-                with map_container:
-                    ui.label("No location data for this device.").classes("text-grey")
-                inner_db.close()
-                return
-
-            # Reverse to chronological: index 0 = oldest
-            locations.reverse()
             points = [
                 {
                     "idx": i,
@@ -481,8 +492,6 @@ async def map_page():
             inner_db.close()
 
             n = len(points)
-            # State stored as list items so closures can mutate
-            state = {"index": n - 1, "window": 20}
             tracked_layers = []
 
             def speed_color(spd):
@@ -497,28 +506,44 @@ async def map_page():
                 return "#F44336"      # red — fast
 
             def acc_radius(h_acc):
+                """Point radius proportional to GPS error. Bigger = worse accuracy."""
                 if h_acc is None:
-                    return 5
-                return max(3, min(20, h_acc / 5))
+                    return 4
+                return max(3, min(18, h_acc / 3))
 
             with map_container:
-                # --- Controls row ---
-                with ui.row().classes("w-full items-center q-gutter-sm"):
-                    prev_btn = ui.button(icon="navigate_before", on_click=lambda: nav(-1)).props("flat dense")
-                    slider = ui.slider(min=0, max=n - 1, step=1, value=state["index"]).classes("flex-grow").props("label-always")
-                    next_btn = ui.button(icon="navigate_next", on_click=lambda: nav(1)).props("flat dense")
-                    ui.label("Window:")
-                    win_input = ui.number(value=state["window"], min=1, max=n, step=5).classes("w-20").props("dense")
-                    pts_label = ui.label(f"{n} pts total").classes("text-caption text-grey")
+                # --- Day navigation bar ---
+                with ui.row().classes("w-full items-center justify-center q-gutter-sm q-mb-sm"):
+                    def nav_day(delta):
+                        day_state["date"] += datetime.timedelta(days=delta)
+                        render_map()
+
+                    ui.button(icon="navigate_before", on_click=lambda: nav_day(-1)).props("flat dense")
+                    d = day_state["date"]
+                    if d == today:
+                        day_label = "Today"
+                    elif d == today - datetime.timedelta(days=1):
+                        day_label = "Yesterday"
+                    else:
+                        day_label = d.strftime("%a %d %b %Y")
+                    ui.button(day_label, on_click=lambda: (day_state.update(date=today), render_map())).props("flat").classes("text-h6")
+                    ui.button(icon="navigate_next", on_click=lambda: nav_day(1)).props("flat dense").bind_enabled_from(
+                        globals(), lambda: day_state["date"] < today,
+                    ) if day_state["date"] < today else ui.button(icon="navigate_next").props("flat dense disabled")
+                    ui.label(f"{n} points").classes("text-caption text-grey q-ml-md")
+
+                if not points:
+                    ui.label("No location data for this day.").classes("text-grey q-pa-lg")
+                    return
 
                 # --- Map ---
-                first = points[state["index"]]
-                m = ui.leaflet(center=(first["lat"], first["lon"]), zoom=15).classes("w-full").style("height: 600px")
+                center_lat = sum(p["lat"] for p in points) / n
+                center_lon = sum(p["lon"] for p in points) / n
+                m = ui.leaflet(center=(center_lat, center_lon), zoom=14).classes("w-full").style("height: 600px")
 
                 # --- Legend ---
                 with ui.row().classes("q-gutter-sm items-center q-mt-xs"):
                     for color, label in [
-                        ("#9C27B0", "Current"),
                         ("#2196F3", "Stationary"),
                         ("#4CAF50", "Walking"),
                         ("#FF9800", "Driving"),
@@ -528,137 +553,47 @@ async def map_page():
                         ui.html(f'<span style="display:inline-block;width:12px;height:12px;'
                                 f'border-radius:50%;background:{color};margin-right:2px"></span>').classes("q-ml-sm")
                         ui.label(label).classes("text-caption")
+                    ui.label("(point size = GPS error)").classes("text-caption text-grey q-ml-md")
 
-                # --- Info card ---
-                info_card = ui.card().classes("w-full q-mt-sm")
+                # --- Render all points for this day ---
+                # Polyline connecting all points
+                if len(points) >= 2:
+                    path = [[pt["lat"], pt["lon"]] for pt in points]
+                    m.generic_layer(
+                        name="polyline",
+                        args=[path, {"color": "#4285F4", "weight": 2, "opacity": 0.4}],
+                    )
 
-                def update_map():
-                    idx = state["index"]
-                    win = state["window"]
+                # Circle markers — size reflects accuracy error
+                for pt in points:
+                    color = speed_color(pt["speed"])
+                    radius = acc_radius(pt["h_acc"])
+                    layer = m.generic_layer(
+                        name="circleMarker",
+                        args=[
+                            [pt["lat"], pt["lon"]],
+                            {
+                                "radius": radius,
+                                "color": color,
+                                "fillColor": color,
+                                "fillOpacity": 0.7,
+                                "weight": 1,
+                            },
+                        ],
+                    )
+                    spd_str = f'{pt["speed"]:.1f} m/s' if pt["speed"] is not None else "n/a"
+                    acc_str = f'{pt["h_acc"]:.0f}m' if pt["h_acc"] is not None else "n/a"
+                    ts_str = _fmt(pt["ts"])
+                    tip = f'<b>#{pt["idx"]}</b><br>{ts_str}<br>Speed: {spd_str}<br>Acc: {acc_str}'
+                    if pt["notes"]:
+                        tip += f'<br><i>{pt["notes"]}</i>'
+                    m.run_layer_method(layer.id, "bindTooltip", tip)
 
-                    # Remove previously tracked layers
-                    for layer in tracked_layers:
-                        try:
-                            m.remove_layer(layer)
-                        except Exception:
-                            pass
-                    tracked_layers.clear()
-
-                    # Visible slice
-                    lo = max(0, idx - win)
-                    hi = min(n, idx + win + 1)
-                    visible = points[lo:hi]
-
-                    # Add circle markers
-                    for pt in visible:
-                        is_current = pt["idx"] == idx
-                        color = "#9C27B0" if is_current else speed_color(pt["speed"])
-                        radius = 10 if is_current else acc_radius(pt["h_acc"])
-                        layer = m.generic_layer(
-                            name="circleMarker",
-                            args=[
-                                [pt["lat"], pt["lon"]],
-                                {
-                                    "radius": radius,
-                                    "color": color,
-                                    "fillColor": color,
-                                    "fillOpacity": 0.85 if is_current else 0.6,
-                                    "weight": 3 if is_current else 1,
-                                },
-                            ],
-                        )
-                        # Tooltip
-                        spd_str = f'{pt["speed"]:.1f} m/s' if pt["speed"] is not None else "n/a"
-                        acc_str = f'{pt["h_acc"]:.0f}m' if pt["h_acc"] is not None else "n/a"
-                        ts_str = _fmt(pt["ts"])
-                        tip = f'<b>#{pt["idx"]}</b><br>{ts_str}<br>Speed: {spd_str}<br>Acc: {acc_str}'
-                        if pt["notes"]:
-                            tip += f'<br>Notes: {pt["notes"]}'
-                        m.run_layer_method(layer.id, "bindTooltip", tip)
-                        tracked_layers.append(layer)
-
-                    # Polyline through visible points
-                    if len(visible) >= 2:
-                        path = [[pt["lat"], pt["lon"]] for pt in visible]
-                        poly = m.generic_layer(
-                            name="polyline",
-                            args=[path, {"color": "#4285F4", "weight": 2, "opacity": 0.5, "dashArray": "6 4"}],
-                        )
-                        tracked_layers.append(poly)
-
-                    # Center on current point
-                    cur = points[idx]
-                    m.set_center((cur["lat"], cur["lon"]))
-
-                    # Update slider
-                    slider.value = idx
-
-                    # Update info card
-                    info_card.clear()
-                    with info_card:
-                        with ui.grid(columns=2).classes("q-gutter-sm"):
-                            ui.label("Time").classes("text-bold")
-                            ui.label(_fmt(cur["ts"]))
-                            ui.label("Speed").classes("text-bold")
-                            spd = cur["speed"]
-                            if spd is not None:
-                                ui.label(f"{spd:.1f} m/s ({spd * 3.6:.1f} km/h)")
-                            else:
-                                ui.label("-")
-                            ui.label("H. Accuracy").classes("text-bold")
-                            ui.label(f'{cur["h_acc"]:.1f}m' if cur["h_acc"] is not None else "-")
-                            ui.label("V. Accuracy").classes("text-bold")
-                            ui.label(f'{cur["v_acc"]:.1f}m' if cur["v_acc"] is not None else "-")
-                            ui.label("Altitude").classes("text-bold")
-                            ui.label(f'{cur["alt"]:.1f}m' if cur["alt"] is not None else "-")
-                            ui.label("Course").classes("text-bold")
-                            ui.label(f'{cur["course"]:.0f}°' if cur["course"] is not None else "-")
-                            ui.label("Received At").classes("text-bold")
-                            ui.label(_fmt(cur["received"]))
-                            ui.label("Batch ID").classes("text-bold")
-                            ui.label(cur["batch"] or "-")
-                            if cur["notes"]:
-                                ui.label("Notes").classes("text-bold")
-                                ui.label(cur["notes"])
-
-                def nav(delta):
-                    state["index"] = max(0, min(n - 1, state["index"] + delta))
-                    update_map()
-
-                def on_slider_change(e):
-                    state["index"] = int(e.value)
-                    update_map()
-
-                def on_window_change(e):
-                    val = e.value
-                    if val is not None and val >= 1:
-                        state["window"] = int(val)
-                        update_map()
-
-                slider.on("update:model-value", on_slider_change, throttle=0.1)
-                win_input.on_value_change(on_window_change)
-
-                def on_key(e):
-                    if e.action.keydown:
-                        if e.key.arrow_left:
-                            nav(-1)
-                        elif e.key.arrow_right:
-                            nav(1)
-                        elif e.key.page_up:
-                            nav(-state["window"])
-                        elif e.key.page_down:
-                            nav(state["window"])
-                        elif e.key.home:
-                            state["index"] = 0
-                            update_map()
-                        elif e.key.end:
-                            state["index"] = n - 1
-                            update_map()
-
-                ui.keyboard(on_key=on_key)
-
-                # Initial render
-                update_map()
+                # Auto-fit bounds
+                if n >= 2:
+                    lats = [p["lat"] for p in points]
+                    lons = [p["lon"] for p in points]
+                    m.run_map_method("fitBounds", [[min(lats), min(lons)], [max(lats), max(lons)]], {"padding": [30, 30]})
 
         if user_selector:
             user_selector.on_value_change(lambda _: refresh_devices())
