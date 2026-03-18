@@ -196,17 +196,53 @@ def _run_state_machine(
 
         elif state.state in ("moving", "unknown"):
             if is_lifecycle:
-                # Lifecycle points during movement are not useful for anchoring
-                state.last_confirmed_at = pt_time
+                # Lifecycle points during movement: check if near accumulated
+                # cluster (user may have arrived and phone went to sleep)
+                if cluster_lats:
+                    centroid_lat = statistics.median(cluster_lats)
+                    centroid_lon = statistics.median(cluster_lons)
+                    dist = haversine_m(centroid_lat, centroid_lon, pt_lat, pt_lon)
+                    if dist <= lifecycle_radius:
+                        state.last_confirmed_at = pt_time
+                        duration = (pt_time - state.arrived_at).total_seconds()
+                        if duration >= min_duration and state.open_visit_id is None:
+                            state.state = "stationary"
+                            place = snap_to_place(db, user_id, centroid_lat, centroid_lon, thresholds)
+                            if not place.address:
+                                addr = reverse_geocode(place.latitude, place.longitude)
+                                if addr:
+                                    place.address = addr
+                            place.visit_count += 1
+                            place.total_duration_seconds += int(duration)
+                            visit = Visit(
+                                device_id=device_id, place_id=place.id,
+                                latitude=centroid_lat, longitude=centroid_lon,
+                                arrival=state.arrived_at, departure=pt_time,
+                                duration_seconds=int(duration),
+                                address=place.address, is_open=True,
+                            )
+                            db.add(visit)
+                            db.flush()
+                            state.open_visit_id = visit.id
+                            state.anchor_latitude = centroid_lat
+                            state.anchor_longitude = centroid_lon
+                            new_visits.append(visit)
+                else:
+                    state.last_confirmed_at = pt_time
                 continue
 
-            if state.anchor_latitude is not None:
+            # Real GPS point — compare against cluster centroid (not first anchor)
+            if cluster_lats:
+                centroid_lat = statistics.median(cluster_lats)
+                centroid_lon = statistics.median(cluster_lons)
+                dist = haversine_m(centroid_lat, centroid_lon, pt_lat, pt_lon)
+            elif state.anchor_latitude is not None:
                 dist = haversine_m(state.anchor_latitude, state.anchor_longitude, pt_lat, pt_lon)
             else:
                 dist = float("inf")
 
             if dist <= radius:
-                # Still near the anchor — check if we've been here long enough
+                # Still near the cluster — accumulate
                 state.last_confirmed_at = pt_time
                 cluster_lats.append(pt_lat)
                 cluster_lons.append(pt_lon)
@@ -217,6 +253,8 @@ def _run_state_machine(
                     state.state = "stationary"
                     visit_lat = statistics.median(cluster_lats)
                     visit_lon = statistics.median(cluster_lons)
+                    state.anchor_latitude = visit_lat
+                    state.anchor_longitude = visit_lon
 
                     place = snap_to_place(db, user_id, visit_lat, visit_lon, thresholds)
                     if not place.address:
@@ -243,7 +281,7 @@ def _run_state_machine(
                     state.open_visit_id = visit.id
                     new_visits.append(visit)
             else:
-                # New anchor — reset
+                # New anchor — reset cluster to just this point
                 cluster_lats.clear()
                 cluster_lons.clear()
                 state.anchor_latitude = pt_lat
