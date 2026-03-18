@@ -272,14 +272,16 @@ struct VisitsView: View {
                         if showAllVisits {
                             Text(arrival, format: .dateTime.month(.abbreviated).day())
                         }
+                        Image(systemName: "arrow.down.circle")
+                            .foregroundStyle(.green)
                         Text(arrival, format: .dateTime.hour().minute())
                         if let departure = visit.departureDate {
-                            Text("–")
+                            Image(systemName: "arrow.up.circle")
+                                .foregroundStyle(.red)
                             Text(departure, format: .dateTime.hour().minute())
                         }
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
                 }
             }
 
@@ -312,6 +314,8 @@ struct VisitsView: View {
                     endDate: endOfDay
                 )
             }
+            // Sort earliest first
+            visits.sort { ($0.arrivalDate ?? .distantPast) < ($1.arrivalDate ?? .distantPast) }
             zoomToFitVisits()
         } catch {
             errorMessage = error.localizedDescription
