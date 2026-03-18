@@ -1034,14 +1034,10 @@ async def settings_page():
 
 # Threshold labels for the admin UI
 _THRESHOLD_LABELS = {
-    "max_horizontal_accuracy_m": ("Max GPS Accuracy (m)", "Discard points with accuracy worse than this"),
-    "max_speed_ms": ("Max Speed (m/s)", "Filter out physically impossible speeds (~306 km/h = 85)"),
-    "min_point_interval_s": ("Min Point Interval (s)", "Deduplicate points closer than this in time"),
-    "max_visit_speed_ms": ("Max Visit Speed (m/s)", "Filter transit points above this speed before visit detection (~7 km/h = 2.0)"),
-    "visit_radius_m": ("Visit Cluster Radius (m)", "Max radius for grouping stationary points"),
+    "max_horizontal_accuracy_m": ("Max GPS Accuracy (m)", "Discard GPS points with accuracy worse than this"),
+    "visit_radius_m": ("Visit Radius (m)", "Max distance from anchor to count as stationary (50m = P95 of real scatter)"),
     "min_visit_duration_s": ("Min Visit Duration (s)", "Minimum seconds to count as a visit (300 = 5 min)"),
     "place_snap_radius_m": ("Place Snap Radius (m)", "Snap visit to existing place if within this distance"),
-    "visit_merge_gap_s": ("Visit Merge Gap (s)", "Merge consecutive visits at same place if gap is shorter (180 = 3 min)"),
 }
 
 
