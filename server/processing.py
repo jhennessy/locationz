@@ -1,10 +1,15 @@
-"""Location processing engine: GPS filtering, visit detection, place snapping, geocoding.
+"""Location processing engine: stateful visit detection, place snapping, geocoding.
 
 Processing pipeline (runs server-side after each batch upload):
-1. Filter out GPS errors (accuracy threshold, speed sanity, duplicates)
-2. Cluster stationary points into candidate visits (>= 5 min in ~50m radius)
+1. Walk through GPS points chronologically with a state machine
+2. Detect stationary visits using anchor-with-implicit-continuation
 3. Snap each visit to nearest known Place (or create a new one)
 4. Reverse-geocode new Places via Nominatim (OpenStreetMap, free)
+
+Key design: the state machine persists in DeviceState across batch uploads.
+An open visit (user still at location) gets its departure updated on each batch.
+Silence (no GPS data) means the user is still at the current location.
+A visit only ends when a point arrives that is far from the anchor.
 """
 
 import datetime
@@ -17,47 +22,31 @@ from typing import Optional
 import requests
 from sqlalchemy.orm import Session
 
-from models import Config, Device, Location, Place, Visit
+from models import Config, Device, DeviceState, Location, Place, Visit
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration (data-driven defaults from GPS scatter analysis)
 # ---------------------------------------------------------------------------
 
-# GPS error filter thresholds
-MAX_HORIZONTAL_ACCURACY_M = 100.0  # discard points with accuracy worse than this
-MAX_SPEED_MS = 85.0                # ~306 km/h; discard impossible speeds
-MIN_POINT_INTERVAL_S = 2           # deduplicate points closer than this in time
-
-# Transit filtering
-MAX_VISIT_SPEED_MS = 2.0          # ~7 km/h; filter moving points before visit detection
-
-# Visit detection
-VISIT_RADIUS_M = 100.0            # max radius for a stationary cluster
-MIN_VISIT_DURATION_S = 300        # 5 minutes
-
-# Place snapping
-PLACE_SNAP_RADIUS_M = 150.0      # snap to existing place within this distance
-
-# Visit merging
-VISIT_MERGE_GAP_S = 180          # merge consecutive visits at same place if gap <= 3 minutes
+MAX_HORIZONTAL_ACCURACY_M = 100.0  # discard real GPS points worse than this
+VISIT_RADIUS_M = 50.0              # P95 of GPS scatter at known places
+LIFECYCLE_RADIUS_M = 150.0         # relaxed radius for lifecycle events (GPS drift)
+MIN_VISIT_DURATION_S = 300         # 5 minutes
+PLACE_SNAP_RADIUS_M = 75.0        # snap to existing place within this distance
 
 # Nominatim rate limiting (max 1 req/sec per OSM policy)
 _last_nominatim_call = 0.0
 
 
 def get_thresholds(db: Session) -> dict:
-    """Read algorithm thresholds from the Config table, falling back to module defaults."""
+    """Read algorithm thresholds from the Config table, falling back to defaults."""
     defaults = {
         "max_horizontal_accuracy_m": MAX_HORIZONTAL_ACCURACY_M,
-        "max_speed_ms": MAX_SPEED_MS,
-        "min_point_interval_s": MIN_POINT_INTERVAL_S,
-        "max_visit_speed_ms": MAX_VISIT_SPEED_MS,
         "visit_radius_m": VISIT_RADIUS_M,
         "min_visit_duration_s": MIN_VISIT_DURATION_S,
         "place_snap_radius_m": PLACE_SNAP_RADIUS_M,
-        "visit_merge_gap_s": VISIT_MERGE_GAP_S,
     }
     rows = db.query(Config).filter(Config.key.in_(defaults.keys())).all()
     for row in rows:
@@ -71,7 +60,7 @@ def get_thresholds(db: Session) -> dict:
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Distance in metres between two WGS-84 points."""
-    R = 6_371_000  # Earth radius in metres
+    R = 6_371_000
     rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -80,184 +69,195 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: GPS error filtering
+# Stateful visit detection
 # ---------------------------------------------------------------------------
 
-def filter_gps_errors(points: list[dict], thresholds: dict | None = None) -> list[dict]:
-    """Remove GPS points that are likely erroneous.
+def process_device_locations(
+    db: Session, device_id: int, user_id: int, thresholds: dict | None = None,
+) -> list[Visit]:
+    """Process new locations using the stateful visit detection algorithm.
 
-    Filters applied:
-    - Horizontal accuracy > max_horizontal_accuracy_m
-    - Speed > max_speed_ms (physically impossible)
-    - Duplicate timestamps within min_point_interval_s
+    Maintains a DeviceState that persists across batch uploads.  An open visit
+    gets its departure updated as new confirming points arrive.  The visit is
+    finalized only when the user departs (a point far from the anchor).
     """
-    if not points:
+    if thresholds is None:
+        thresholds = get_thresholds(db)
+
+    radius = thresholds.get("visit_radius_m", VISIT_RADIUS_M)
+    lifecycle_radius = radius * 3  # ~150m for lifecycle GPS drift
+    min_duration = thresholds.get("min_visit_duration_s", MIN_VISIT_DURATION_S)
+    max_accuracy = thresholds.get("max_horizontal_accuracy_m", MAX_HORIZONTAL_ACCURACY_M)
+
+    # Get or create device state
+    state = db.query(DeviceState).filter(DeviceState.device_id == device_id).first()
+    if not state:
+        state = DeviceState(device_id=device_id, state="unknown")
+        db.add(state)
+        db.flush()
+
+    # Fetch new locations since last processed point
+    since = state.last_confirmed_at or datetime.datetime.min
+    raw_locations = (
+        db.query(Location)
+        .filter(Location.device_id == device_id, Location.timestamp > since)
+        .order_by(Location.timestamp.asc())
+        .all()
+    )
+
+    if not raw_locations:
         return []
 
-    max_acc = (thresholds or {}).get("max_horizontal_accuracy_m", MAX_HORIZONTAL_ACCURACY_M)
-    max_spd = (thresholds or {}).get("max_speed_ms", MAX_SPEED_MS)
-    min_interval = (thresholds or {}).get("min_point_interval_s", MIN_POINT_INTERVAL_S)
+    new_visits = _run_state_machine(
+        db, state, raw_locations, user_id, device_id,
+        radius, lifecycle_radius, min_duration, max_accuracy, thresholds,
+    )
 
-    filtered = []
-    last_ts = None
-
-    for pt in sorted(points, key=lambda p: p["timestamp"]):
-        acc = pt.get("horizontal_accuracy")
-        if acc is not None and acc > max_acc:
-            continue
-
-        speed = pt.get("speed")
-        if speed is not None and speed > max_spd:
-            continue
-
-        ts = pt["timestamp"]
-        if last_ts is not None and (ts - last_ts).total_seconds() < min_interval:
-            continue
-
-        filtered.append(pt)
-        last_ts = ts
-
-    return filtered
+    db.commit()
+    return new_visits
 
 
-# ---------------------------------------------------------------------------
-# Step 1b: Transit point filtering
-# ---------------------------------------------------------------------------
+def _run_state_machine(
+    db: Session,
+    state: DeviceState,
+    locations: list[Location],
+    user_id: int,
+    device_id: int,
+    radius: float,
+    lifecycle_radius: float,
+    min_duration: float,
+    max_accuracy: float,
+    thresholds: dict,
+) -> list[Visit]:
+    """Core state machine: process a sequence of locations and update DeviceState."""
+    new_visits = []
+    # Collect non-lifecycle points for centroid computation of current cluster
+    cluster_lats: list[float] = []
+    cluster_lons: list[float] = []
 
-def filter_transit_points(points: list[dict], thresholds: dict | None = None) -> list[dict]:
-    """Remove points where the device is clearly in transit.
+    for loc in locations:
+        is_lifecycle = loc.notes is not None
+        pt_lat, pt_lon = loc.latitude, loc.longitude
+        pt_time = loc.timestamp
 
-    Points with speed > max_visit_speed_ms are removed before visit detection
-    to prevent transit points from polluting stationary clusters.
+        # Skip real GPS points with bad accuracy (lifecycle points kept for timing)
+        if not is_lifecycle:
+            acc = loc.horizontal_accuracy
+            if acc is not None and acc > max_accuracy:
+                continue
 
-    Points with speed=None or speed<=0 (iOS uses -1 for unknown) are kept.
-    """
-    if not points:
-        return []
+        if state.state == "stationary":
+            dist = haversine_m(state.anchor_latitude, state.anchor_longitude, pt_lat, pt_lon)
+            effective_radius = lifecycle_radius if is_lifecycle else radius
 
-    max_visit_speed = (thresholds or {}).get("max_visit_speed_ms", MAX_VISIT_SPEED_MS)
+            if dist <= effective_radius:
+                # Still here — update departure on the open visit
+                state.last_confirmed_at = pt_time
+                if not is_lifecycle:
+                    cluster_lats.append(pt_lat)
+                    cluster_lons.append(pt_lon)
+                if state.open_visit_id:
+                    visit = db.query(Visit).filter(Visit.id == state.open_visit_id).first()
+                    if visit:
+                        visit.departure = pt_time
+                        visit.duration_seconds = int((pt_time - visit.arrival).total_seconds())
+            else:
+                # Departed — finalize the open visit
+                if state.open_visit_id:
+                    visit = db.query(Visit).filter(Visit.id == state.open_visit_id).first()
+                    if visit:
+                        visit.is_open = False
+                        # Update centroid from collected cluster points
+                        if cluster_lats:
+                            visit.latitude = statistics.median(cluster_lats)
+                            visit.longitude = statistics.median(cluster_lons)
 
-    return [
-        pt for pt in points
-        if pt.get("speed") is None or pt["speed"] <= max_visit_speed
-    ]
+                # Reset for new potential stay
+                cluster_lats.clear()
+                cluster_lons.clear()
+                state.open_visit_id = None
 
+                if not is_lifecycle:
+                    state.state = "moving"
+                    state.anchor_latitude = pt_lat
+                    state.anchor_longitude = pt_lon
+                    state.arrived_at = pt_time
+                    state.last_confirmed_at = pt_time
+                    cluster_lats.append(pt_lat)
+                    cluster_lons.append(pt_lon)
+                else:
+                    # Lifecycle point far from anchor — user left but we don't
+                    # have a precise new location yet
+                    state.state = "moving"
+                    state.anchor_latitude = None
+                    state.anchor_longitude = None
+                    state.arrived_at = pt_time
+                    state.last_confirmed_at = pt_time
 
-# ---------------------------------------------------------------------------
-# Step 2: Visit detection
-# ---------------------------------------------------------------------------
+        elif state.state in ("moving", "unknown"):
+            if is_lifecycle:
+                # Lifecycle points during movement are not useful for anchoring
+                state.last_confirmed_at = pt_time
+                continue
 
-def detect_visits(points: list[dict], thresholds: dict | None = None) -> list[dict]:
-    """Detect stationary visits from a time-sorted list of GPS points.
+            if state.anchor_latitude is not None:
+                dist = haversine_m(state.anchor_latitude, state.anchor_longitude, pt_lat, pt_lon)
+            else:
+                dist = float("inf")
 
-    Algorithm:
-    - Walk through points chronologically.
-    - Maintain a current cluster with a fixed anchor (first point).
-    - If next point is within visit_radius_m of the anchor, add it.
-    - Otherwise, finalize the cluster (emit if duration >= min_visit_duration_s).
-    - The visit's reported location is the median of all cluster points.
-    """
-    if len(points) < 2:
-        return []
+            if dist <= radius:
+                # Still near the anchor — check if we've been here long enough
+                state.last_confirmed_at = pt_time
+                cluster_lats.append(pt_lat)
+                cluster_lons.append(pt_lon)
+                duration = (pt_time - state.arrived_at).total_seconds()
 
-    visit_radius = (thresholds or {}).get("visit_radius_m", VISIT_RADIUS_M)
-    min_duration = (thresholds or {}).get("min_visit_duration_s", MIN_VISIT_DURATION_S)
+                if duration >= min_duration and state.open_visit_id is None:
+                    # Promote to STATIONARY, create open visit
+                    state.state = "stationary"
+                    visit_lat = statistics.median(cluster_lats)
+                    visit_lon = statistics.median(cluster_lons)
 
-    visits: list[dict] = []
-    cluster: list[dict] = [points[0]]
-    anchor_lat, anchor_lon = points[0]["latitude"], points[0]["longitude"]
+                    place = snap_to_place(db, user_id, visit_lat, visit_lon, thresholds)
+                    if not place.address:
+                        addr = reverse_geocode(place.latitude, place.longitude)
+                        if addr:
+                            place.address = addr
 
-    for pt in points[1:]:
-        dist = haversine_m(anchor_lat, anchor_lon, pt["latitude"], pt["longitude"])
+                    place.visit_count += 1
+                    place.total_duration_seconds += int(duration)
 
-        if dist <= visit_radius:
-            cluster.append(pt)
-        else:
-            # Finalize cluster if it qualifies as a visit
-            _maybe_emit_visit(cluster, visits, min_duration)
-            # Start new cluster with this point as the anchor
-            cluster = [pt]
-            anchor_lat, anchor_lon = pt["latitude"], pt["longitude"]
+                    visit = Visit(
+                        device_id=device_id,
+                        place_id=place.id,
+                        latitude=visit_lat,
+                        longitude=visit_lon,
+                        arrival=state.arrived_at,
+                        departure=pt_time,
+                        duration_seconds=int(duration),
+                        address=place.address,
+                        is_open=True,
+                    )
+                    db.add(visit)
+                    db.flush()
+                    state.open_visit_id = visit.id
+                    new_visits.append(visit)
+            else:
+                # New anchor — reset
+                cluster_lats.clear()
+                cluster_lons.clear()
+                state.anchor_latitude = pt_lat
+                state.anchor_longitude = pt_lon
+                state.arrived_at = pt_time
+                state.last_confirmed_at = pt_time
+                cluster_lats.append(pt_lat)
+                cluster_lons.append(pt_lon)
 
-    # Don't forget the last cluster
-    _maybe_emit_visit(cluster, visits, min_duration)
-
-    return visits
-
-
-def _maybe_emit_visit(
-    cluster: list[dict],
-    visits: list[dict],
-    min_duration: float = MIN_VISIT_DURATION_S,
-):
-    """Emit a visit if the cluster meets minimum duration.
-
-    The visit location is the median lat/lon — more robust to GPS outliers than the mean.
-    """
-    if len(cluster) < 2:
-        return
-    arrival = cluster[0]["timestamp"]
-    departure = cluster[-1]["timestamp"]
-    duration = (departure - arrival).total_seconds()
-    if duration >= min_duration:
-        visits.append({
-            "latitude": statistics.median(pt["latitude"] for pt in cluster),
-            "longitude": statistics.median(pt["longitude"] for pt in cluster),
-            "arrival": arrival,
-            "departure": departure,
-            "duration_seconds": int(duration),
-        })
-
-
-# ---------------------------------------------------------------------------
-# Step 2b: Visit merging
-# ---------------------------------------------------------------------------
-
-def merge_nearby_visits(visits: list[dict], thresholds: dict | None = None) -> list[dict]:
-    """Merge consecutive visits at the same location if the gap between them is short.
-
-    If a person leaves a place and returns within visit_merge_gap_s, the two
-    visits are combined into one continuous visit.  "Same location" means the
-    centroids are within place_snap_radius_m of each other.
-    """
-    if len(visits) < 2:
-        return visits
-
-    merge_gap = (thresholds or {}).get("visit_merge_gap_s", VISIT_MERGE_GAP_S)
-    snap_radius = (thresholds or {}).get("place_snap_radius_m", PLACE_SNAP_RADIUS_M)
-
-    merged: list[dict] = [visits[0].copy()]
-
-    for v in visits[1:]:
-        prev = merged[-1]
-        gap = (v["arrival"] - prev["departure"]).total_seconds()
-        dist = haversine_m(prev["latitude"], prev["longitude"], v["latitude"], v["longitude"])
-
-        if gap <= merge_gap and dist <= snap_radius:
-            # Merge: extend departure, recalculate duration, average the centroid
-            prev["departure"] = v["departure"]
-            prev["duration_seconds"] = int(
-                (prev["departure"] - prev["arrival"]).total_seconds()
-            )
-            # Weighted average of centroids (by original duration)
-            prev_weight = prev["duration_seconds"] - v["duration_seconds"]
-            if prev_weight <= 0:
-                prev_weight = 1
-            total_weight = prev_weight + v["duration_seconds"]
-            prev["latitude"] = (
-                prev["latitude"] * prev_weight + v["latitude"] * v["duration_seconds"]
-            ) / total_weight
-            prev["longitude"] = (
-                prev["longitude"] * prev_weight + v["longitude"] * v["duration_seconds"]
-            ) / total_weight
-        else:
-            merged.append(v.copy())
-
-    return merged
+    return new_visits
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Place snapping
+# Place snapping
 # ---------------------------------------------------------------------------
 
 def snap_to_place(
@@ -283,7 +283,6 @@ def snap_to_place(
     if best_place is not None and best_dist <= snap_radius:
         return best_place
 
-    # Create new place
     new_place = Place(
         user_id=user_id,
         latitude=lat,
@@ -292,19 +291,18 @@ def snap_to_place(
         total_duration_seconds=0,
     )
     db.add(new_place)
-    db.flush()  # get the id
+    db.flush()
     return new_place
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Reverse geocoding (Nominatim / OpenStreetMap)
+# Reverse geocoding (Nominatim / OpenStreetMap)
 # ---------------------------------------------------------------------------
 
 def reverse_geocode(lat: float, lon: float) -> Optional[str]:
     """Look up an address from coordinates using Nominatim (free, 1 req/s)."""
     global _last_nominatim_call
 
-    # Rate limit
     elapsed = time.time() - _last_nominatim_call
     if elapsed < 1.1:
         time.sleep(1.1 - elapsed)
@@ -334,135 +332,60 @@ def reverse_geocode(lat: float, lon: float) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Full pipeline: process locations for a device
+# Reprocessing: rebuild all visits from scratch
 # ---------------------------------------------------------------------------
 
-def process_device_locations(
-    db: Session, device_id: int, user_id: int, thresholds: dict | None = None,
-) -> list[Visit]:
-    """Run the full processing pipeline on all unprocessed locations for a device.
-
-    Returns newly created Visit objects.
-    """
-    if thresholds is None:
-        thresholds = get_thresholds(db)
-
-    # Get the latest visit departure for this device (process only newer data)
-    latest_visit = (
-        db.query(Visit)
-        .filter(Visit.device_id == device_id)
-        .order_by(Visit.departure.desc())
-        .first()
-    )
-    since = latest_visit.departure if latest_visit else datetime.datetime.min
-
-    return _process_locations_since(db, device_id, user_id, since, thresholds)
-
-
-def _process_locations_since(
-    db: Session, device_id: int, user_id: int,
-    since: datetime.datetime, thresholds: dict,
-) -> list[Visit]:
-    """Process locations for a device since a given time."""
-    raw_locations = (
-        db.query(Location)
-        .filter(Location.device_id == device_id, Location.timestamp > since)
-        .order_by(Location.timestamp.asc())
-        .all()
-    )
-
-    if not raw_locations:
-        return []
-
-    # Convert to dicts for processing
-    points = [
-        {
-            "latitude": loc.latitude,
-            "longitude": loc.longitude,
-            "altitude": loc.altitude,
-            "horizontal_accuracy": loc.horizontal_accuracy,
-            "speed": loc.speed,
-            "timestamp": loc.timestamp,
-        }
-        for loc in raw_locations
-    ]
-
-    # Step 1: Filter GPS errors
-    clean_points = filter_gps_errors(points, thresholds)
-    if not clean_points:
-        return []
-
-    # Step 1b: Remove transit points
-    stationary_points = filter_transit_points(clean_points, thresholds)
-    if not stationary_points:
-        return []
-
-    # Step 2: Detect visits
-    raw_visits = detect_visits(stationary_points, thresholds)
-    if not raw_visits:
-        return []
-
-    # Step 2b: Merge visits at same place with short gaps
-    raw_visits = merge_nearby_visits(raw_visits, thresholds)
-
-    # Step 3 & 4: Snap to places, geocode, create Visit records
-    new_visits = []
-    for v in raw_visits:
-        place = snap_to_place(db, user_id, v["latitude"], v["longitude"], thresholds)
-
-        # Geocode if place has no address yet
-        if not place.address:
-            addr = reverse_geocode(place.latitude, place.longitude)
-            if addr:
-                place.address = addr
-
-        # Update place stats
-        place.visit_count += 1
-        place.total_duration_seconds += v["duration_seconds"]
-
-        visit = Visit(
-            device_id=device_id,
-            place_id=place.id,
-            latitude=v["latitude"],
-            longitude=v["longitude"],
-            arrival=v["arrival"],
-            departure=v["departure"],
-            duration_seconds=v["duration_seconds"],
-            address=place.address,
-        )
-        db.add(visit)
-        new_visits.append(visit)
-
-    db.commit()
-    return new_visits
-
-
 def reprocess_all(db: Session, user_id: int) -> dict:
-    """Delete all visits/places for the user and reprocess from scratch.
+    """Delete all visits/places/device states for the user and reprocess.
 
     Returns {"visits_created": int, "places_created": int}.
     """
     thresholds = get_thresholds(db)
 
-    # Delete existing visits and places for this user
     devices = db.query(Device).filter(Device.user_id == user_id).all()
     device_ids = [d.id for d in devices]
 
+    # Clean slate
     if device_ids:
         db.query(Visit).filter(Visit.device_id.in_(device_ids)).delete(synchronize_session=False)
+        db.query(DeviceState).filter(DeviceState.device_id.in_(device_ids)).delete(synchronize_session=False)
     db.query(Place).filter(Place.user_id == user_id).delete(synchronize_session=False)
     db.commit()
 
-    # Reprocess all devices
     total_visits = 0
     for device in devices:
-        visits = _process_locations_since(
-            db, device.id, user_id, datetime.datetime.min, thresholds,
+        # Create a fresh state and run the state machine over ALL locations
+        state = DeviceState(device_id=device.id, state="unknown")
+        db.add(state)
+        db.flush()
+
+        radius = thresholds.get("visit_radius_m", VISIT_RADIUS_M)
+        lifecycle_radius = radius * 3
+        min_duration = thresholds.get("min_visit_duration_s", MIN_VISIT_DURATION_S)
+        max_accuracy = thresholds.get("max_horizontal_accuracy_m", MAX_HORIZONTAL_ACCURACY_M)
+
+        raw_locations = (
+            db.query(Location)
+            .filter(Location.device_id == device.id)
+            .order_by(Location.timestamp.asc())
+            .all()
         )
-        total_visits += len(visits)
+
+        if raw_locations:
+            visits = _run_state_machine(
+                db, state, raw_locations, user_id, device.id,
+                radius, lifecycle_radius, min_duration, max_accuracy, thresholds,
+            )
+            # Close any remaining open visit at the end of reprocessing
+            if state.open_visit_id:
+                visit = db.query(Visit).filter(Visit.id == state.open_visit_id).first()
+                if visit:
+                    visit.is_open = False
+            total_visits += len(visits)
+
+    db.commit()
 
     places_created = db.query(Place).filter(Place.user_id == user_id).count()
-
     logger.info(
         "Reprocessed user=%d: %d visits, %d places created",
         user_id, total_visits, places_created,

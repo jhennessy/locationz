@@ -99,6 +99,7 @@ class VisitResponse(BaseModel):
     departure: str
     duration_seconds: int
     address: Optional[str] = None
+    is_open: bool = False
 
     class Config:
         from_attributes = True
@@ -430,6 +431,7 @@ def get_visits(
             departure=v.departure.isoformat(),
             duration_seconds=v.duration_seconds,
             address=v.address,
+            is_open=bool(v.is_open),
         )
         for v in visits
     ]
@@ -537,6 +539,7 @@ def get_place_visits(
             departure=v.departure.isoformat(),
             duration_seconds=v.duration_seconds,
             address=v.address,
+            is_open=bool(v.is_open),
         )
         for v in visits
     ]

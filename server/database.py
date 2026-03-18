@@ -30,7 +30,7 @@ def get_db():
 
 def init_db():
     """Create all tables, run migrations, and seed the default admin user."""
-    from models import User, Device, Location, Place, Visit, Config, ReprocessingJob, Session, CurrentPosition  # noqa: F401
+    from models import User, Device, Location, Place, Visit, Config, ReprocessingJob, Session, CurrentPosition, DeviceState  # noqa: F401
 
     logger.info("Initializing database at %s", DATABASE_URL)
     Base.metadata.create_all(bind=engine)
@@ -57,6 +57,13 @@ def _migrate():
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE locations ADD COLUMN notes TEXT"))
 
+    if "visits" in insp.get_table_names():
+        columns = {c["name"] for c in insp.get_columns("visits")}
+        if "is_open" not in columns:
+            logger.info("Migrating: adding is_open column to visits table")
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE visits ADD COLUMN is_open BOOLEAN DEFAULT 0"))
+
 
 def _seed_admin():
     """Create the default admin user if it doesn't exist."""
@@ -82,13 +89,9 @@ def _seed_admin():
 # Default algorithm thresholds (must match processing.py module-level constants)
 DEFAULT_THRESHOLDS = {
     "max_horizontal_accuracy_m": "100.0",
-    "max_speed_ms": "85.0",
-    "min_point_interval_s": "2",
-    "max_visit_speed_ms": "2.0",
-    "visit_radius_m": "100.0",
+    "visit_radius_m": "50.0",
     "min_visit_duration_s": "300",
-    "place_snap_radius_m": "150.0",
-    "visit_merge_gap_s": "180",
+    "place_snap_radius_m": "75.0",
     "position_ttl_seconds": "300",
 }
 

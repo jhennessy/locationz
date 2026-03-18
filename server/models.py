@@ -93,10 +93,30 @@ class Visit(Base):
     departure = Column(DateTime, nullable=False)
     duration_seconds = Column(Integer, nullable=False)
     address = Column(Text, nullable=True)
+    is_open = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     device = relationship("Device")
     place = relationship("Place", back_populates="visits")
+
+
+class DeviceState(Base):
+    """Persists the visit-detection state machine across batch uploads."""
+
+    __tablename__ = "device_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), unique=True, nullable=False)
+    state = Column(String, nullable=False, default="unknown")  # stationary, moving, unknown
+    anchor_latitude = Column(Float, nullable=True)
+    anchor_longitude = Column(Float, nullable=True)
+    arrived_at = Column(DateTime, nullable=True)
+    last_confirmed_at = Column(DateTime, nullable=True)
+    open_visit_id = Column(Integer, ForeignKey("visits.id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    device = relationship("Device")
+    open_visit = relationship("Visit", foreign_keys=[open_visit_id])
 
 
 class Config(Base):
