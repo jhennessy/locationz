@@ -765,7 +765,7 @@ async def visits_page():
             visits = (
                 inner_db.query(Visit)
                 .filter(Visit.device_id == selected_device.value)
-                .order_by(Visit.arrival.desc())
+                .order_by(Visit.arrival.asc())
                 .limit(200)
                 .all()
             )
@@ -777,19 +777,19 @@ async def visits_page():
                     return
 
                 # Map showing visit locations
-                center = visits[0]
+                center = visits[-1]
                 m = ui.leaflet(center=(center.latitude, center.longitude), zoom=13).classes("w-full").style(
                     "height: 400px"
                 )
                 for v in visits:
                     m.marker(latlng=(v.latitude, v.longitude))
 
-                # Visit table
+                # Visit table — sorted earliest to latest
                 rows = [
                     {
                         "address": v.address or f"{v.latitude:.5f}, {v.longitude:.5f}",
                         "arrival": _fmt(v.arrival, "%Y-%m-%d %H:%M"),
-                        "departure": _fmt(v.departure, "%H:%M"),
+                        "departure": _fmt(v.departure, "%Y-%m-%d %H:%M"),
                         "duration": _format_duration(v.duration_seconds),
                         "place_id": v.place_id,
                     }
@@ -797,8 +797,8 @@ async def visits_page():
                 ]
                 columns = [
                     {"name": "address", "label": "Location", "field": "address", "align": "left"},
-                    {"name": "arrival", "label": "Arrived", "field": "arrival"},
-                    {"name": "departure", "label": "Left", "field": "departure"},
+                    {"name": "arrival", "label": "Arrival", "field": "arrival"},
+                    {"name": "departure", "label": "Departure", "field": "departure"},
                     {"name": "duration", "label": "Duration", "field": "duration"},
                 ]
                 ui.table(columns=columns, rows=rows).classes("w-full q-mt-md")
