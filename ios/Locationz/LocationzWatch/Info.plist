@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Locationz needs your location to track your position when your iPhone is not nearby.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Locationz needs your location to track your position.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>ch.codelook.locationz</string>
+</dict>
+</plist>

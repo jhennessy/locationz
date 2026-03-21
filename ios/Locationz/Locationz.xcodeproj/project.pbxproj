@@ -28,6 +28,18 @@
 		8A1B2C3D4E5F60718293A4D1 /* TestData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D1 /* TestData.swift */; };
 		8A1B2C3D4E5F60718293A4E0 /* ModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */; };
 		8A1B2C3D4E5F60718293A4F0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4F0 /* Assets.xcassets */; };
+		FB1B2C3D0E5F000C0002A3B4 /* PhoneConnectivityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D0E5F00080002A3B4 /* PhoneConnectivityService.swift */; };
+		FB1B2C3D0E5F00010002A3B4 /* LocationzWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D0E5F00010002A3B4 /* LocationzWatchApp.swift */; };
+		FB1B2C3D0E5F00020002A3B4 /* WatchTrackingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D0E5F00020002A3B4 /* WatchTrackingView.swift */; };
+		FB1B2C3D0E5F00030002A3B4 /* WatchLocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D0E5F00030002A3B4 /* WatchLocationService.swift */; };
+		FB1B2C3D0E5F00040002A3B4 /* WatchAPIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D0E5F00040002A3B4 /* WatchAPIService.swift */; };
+		FB1B2C3D0E5F00050002A3B4 /* WatchConnectivityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D0E5F00050002A3B4 /* WatchConnectivityService.swift */; };
+		FB1B2C3D0E5F00060002A3B4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FA1B2C3D0E5F00060002A3B4 /* Assets.xcassets */; };
+		FB1B2C3D0E5F00070002A3B4 /* LocationPoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C8 /* LocationPoint.swift */; };
+		FB1B2C3D0E5F00080002A3B4 /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C6 /* User.swift */; };
+		FB1B2C3D0E5F00090002A3B4 /* Device.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C7 /* Device.swift */; };
+		FB1B2C3D0E5F000A0002A3B4 /* Visit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C9 /* Visit.swift */; };
+		FB1B2C3D0E5F000B0002A3B4 /* Place.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D0 /* Place.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -65,6 +77,15 @@
 		1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTests.swift; sourceTree = "<group>"; };
 		9F0E1D2C3B4A59687706A5B4 /* Locationz.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Locationz.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F0E1D2C3B4A59687706A5B5 /* LocationzTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocationzTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FA1B2C3D0E5F00010002A3B4 /* LocationzWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationzWatchApp.swift; sourceTree = "<group>"; };
+		FA1B2C3D0E5F00020002A3B4 /* WatchTrackingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchTrackingView.swift; sourceTree = "<group>"; };
+		FA1B2C3D0E5F00030002A3B4 /* WatchLocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLocationService.swift; sourceTree = "<group>"; };
+		FA1B2C3D0E5F00040002A3B4 /* WatchAPIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAPIService.swift; sourceTree = "<group>"; };
+		FA1B2C3D0E5F00050002A3B4 /* WatchConnectivityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchConnectivityService.swift; sourceTree = "<group>"; };
+		FA1B2C3D0E5F00060002A3B4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		FA1B2C3D0E5F00070002A3B4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FA1B2C3D0E5F00080002A3B4 /* PhoneConnectivityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneConnectivityService.swift; sourceTree = "<group>"; };
+		FF1B2C3D0E5F00010002A3B4 /* LocationzWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocationzWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,6 +103,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FE1B2C3D0E5F00020002A3B4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -89,6 +117,7 @@
 			isa = PBXGroup;
 			children = (
 				2B3C4D5E6F70819203A4B5C7 /* Locationz */,
+				FC1B2C3D0E5F00010002A3B4 /* LocationzWatch */,
 				2B3C4D5E6F70819203A4B5D0 /* LocationzTests */,
 				2B3C4D5E6F70819203A4B5C8 /* Products */,
 			);
@@ -112,6 +141,7 @@
 			children = (
 				9F0E1D2C3B4A59687706A5B4 /* Locationz.app */,
 				9F0E1D2C3B4A59687706A5B5 /* LocationzTests.xctest */,
+				FF1B2C3D0E5F00010002A3B4 /* LocationzWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -151,6 +181,7 @@
 				1A2B3C4D5E6F70819203A4D5 /* BluetoothService.swift */,
 				1A2B3C4D5E6F70819203A4C5 /* LocationService.swift */,
 				1A2B3C4D5E6F70819203A4D3 /* Log.swift */,
+				FA1B2C3D0E5F00080002A3B4 /* PhoneConnectivityService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -161,6 +192,28 @@
 				1A2B3C4D5E6F70819203A4E0 /* ModelTests.swift */,
 			);
 			path = LocationzTests;
+			sourceTree = "<group>";
+		};
+		FC1B2C3D0E5F00010002A3B4 /* LocationzWatch */ = {
+			isa = PBXGroup;
+			children = (
+				FA1B2C3D0E5F00010002A3B4 /* LocationzWatchApp.swift */,
+				FA1B2C3D0E5F00020002A3B4 /* WatchTrackingView.swift */,
+				FA1B2C3D0E5F00070002A3B4 /* Info.plist */,
+				FA1B2C3D0E5F00060002A3B4 /* Assets.xcassets */,
+				FC1B2C3D0E5F00020002A3B4 /* Services */,
+			);
+			path = LocationzWatch;
+			sourceTree = "<group>";
+		};
+		FC1B2C3D0E5F00020002A3B4 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				FA1B2C3D0E5F00030002A3B4 /* WatchLocationService.swift */,
+				FA1B2C3D0E5F00040002A3B4 /* WatchAPIService.swift */,
+				FA1B2C3D0E5F00050002A3B4 /* WatchConnectivityService.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -200,6 +253,23 @@
 			productReference = 9F0E1D2C3B4A59687706A5B5 /* LocationzTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		FD1B2C3D0E5F00010002A3B4 /* LocationzWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DD1B2C3D0E5F00030002A3B4 /* Build configuration list for PBXNativeTarget "LocationzWatch" */;
+			buildPhases = (
+				FE1B2C3D0E5F00010002A3B4 /* Sources */,
+				FE1B2C3D0E5F00020002A3B4 /* Frameworks */,
+				FE1B2C3D0E5F00030002A3B4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LocationzWatch;
+			productName = LocationzWatch;
+			productReference = FF1B2C3D0E5F00010002A3B4 /* LocationzWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -216,6 +286,9 @@
 					5E6F70819203A4B5C6D7E900 = {
 						CreatedOnToolsVersion = 15.0;
 						TestTargetID = 5E6F70819203A4B5C6D7E8F9;
+					};
+					FD1B2C3D0E5F00010002A3B4 = {
+						CreatedOnToolsVersion = 15.0;
 					};
 				};
 			};
@@ -234,6 +307,7 @@
 			targets = (
 				5E6F70819203A4B5C6D7E8F9 /* Locationz */,
 				5E6F70819203A4B5C6D7E900 /* LocationzTests */,
+				FD1B2C3D0E5F00010002A3B4 /* LocationzWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -244,6 +318,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				8A1B2C3D4E5F60718293A4F0 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FE1B2C3D0E5F00030002A3B4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FB1B2C3D0E5F00060002A3B4 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -273,6 +355,24 @@
 				8A1B2C3D4E5F60718293A4C9 /* Visit.swift in Sources */,
 				8A1B2C3D4E5F60718293A4D0 /* Place.swift in Sources */,
 				8A1B2C3D4E5F60718293A4D1 /* TestData.swift in Sources */,
+				FB1B2C3D0E5F000C0002A3B4 /* PhoneConnectivityService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FE1B2C3D0E5F00010002A3B4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FB1B2C3D0E5F00010002A3B4 /* LocationzWatchApp.swift in Sources */,
+				FB1B2C3D0E5F00020002A3B4 /* WatchTrackingView.swift in Sources */,
+				FB1B2C3D0E5F00030002A3B4 /* WatchLocationService.swift in Sources */,
+				FB1B2C3D0E5F00040002A3B4 /* WatchAPIService.swift in Sources */,
+				FB1B2C3D0E5F00050002A3B4 /* WatchConnectivityService.swift in Sources */,
+				FB1B2C3D0E5F00070002A3B4 /* LocationPoint.swift in Sources */,
+				FB1B2C3D0E5F00080002A3B4 /* User.swift in Sources */,
+				FB1B2C3D0E5F00090002A3B4 /* Device.swift in Sources */,
+				FB1B2C3D0E5F000A0002A3B4 /* Visit.swift in Sources */,
+				FB1B2C3D0E5F000B0002A3B4 /* Place.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -441,6 +541,64 @@
 			};
 			name = Release;
 		};
+		DD1B2C3D0E5F00010002A3B4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7XYRZFRL6S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LocationzWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Locationz;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Locationz needs your location to track your position when your iPhone is not nearby.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Locationz needs your location to track your position.";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = ch.codelook.locationz;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ch.codelook.locationz.watchapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
+		DD1B2C3D0E5F00020002A3B4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7XYRZFRL6S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LocationzWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Locationz;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Locationz needs your location to track your position when your iPhone is not nearby.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Locationz needs your location to track your position.";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = ch.codelook.locationz;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ch.codelook.locationz.watchapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -467,6 +625,15 @@
 			buildConfigurations = (
 				CC1B2C3D4E5F60718293A4B5 /* Debug */,
 				CC1B2C3D4E5F60718293A4B6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DD1B2C3D0E5F00030002A3B4 /* Build configuration list for PBXNativeTarget "LocationzWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD1B2C3D0E5F00010002A3B4 /* Debug */,
+				DD1B2C3D0E5F00020002A3B4 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
