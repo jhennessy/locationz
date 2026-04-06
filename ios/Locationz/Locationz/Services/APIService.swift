@@ -54,7 +54,16 @@ class APIService: ObservableObject {
 
     // MARK: - Generic request helpers
 
+    /// Whether a token refresh (re-login) is already in flight, to avoid concurrent attempts.
+    private var isRefreshing = false
+
     private func makeRequest(path: String, method: String, body: Data? = nil, authenticated: Bool = true) async throws -> Data {
+        let data = try await executeRequest(path: path, method: method, body: body, authenticated: authenticated)
+
+        return data
+    }
+
+    private func executeRequest(path: String, method: String, body: Data?, authenticated: Bool, isRetry: Bool = false) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else {
             throw APIError.invalidURL
         }
@@ -87,12 +96,48 @@ class APIService: ObservableObject {
             return Data()
         }
 
+        // On 401 for authenticated requests, try to re-login with stored credentials
+        if httpResponse.statusCode == 401 && authenticated && !isRetry {
+            if try await refreshToken() {
+                return try await executeRequest(path: path, method: method, body: body, authenticated: authenticated, isRetry: true)
+            }
+        }
+
         guard (200...299).contains(httpResponse.statusCode) else {
             let message = String(data: data, encoding: .utf8) ?? "Unknown error"
             throw APIError.httpError(httpResponse.statusCode, message)
         }
 
         return data
+    }
+
+    /// Attempt to re-login using credentials stored in the Keychain.
+    /// Returns `true` if a new token was obtained, `false` otherwise.
+    private func refreshToken() async throws -> Bool {
+        guard !isRefreshing else { return false }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        guard let credentials = KeychainService.loadCredentials() else {
+            // No stored credentials — clear session so the user sees the login screen
+            self.token = nil
+            self.currentUser = nil
+            return false
+        }
+
+        do {
+            let body = try JSONEncoder().encode(LoginRequest(username: credentials.username, password: credentials.password))
+            let data = try await executeRequest(path: "/api/login", method: "POST", body: body, authenticated: false, isRetry: true)
+            let response = try JSONDecoder().decode(TokenResponse.self, from: data)
+            self.token = response.token
+            self.currentUser = response
+            return true
+        } catch {
+            // Re-login failed (wrong password, server down, etc.) — force logout
+            self.token = nil
+            self.currentUser = nil
+            return false
+        }
     }
 
     // MARK: - Auth
@@ -103,6 +148,7 @@ class APIService: ObservableObject {
         let response = try JSONDecoder().decode(TokenResponse.self, from: data)
         self.token = response.token
         self.currentUser = response
+        KeychainService.storeCredentials(username: username, password: password)
     }
 
     func register(username: String, email: String, password: String) async throws {
@@ -111,6 +157,7 @@ class APIService: ObservableObject {
         let response = try JSONDecoder().decode(TokenResponse.self, from: data)
         self.token = response.token
         self.currentUser = response
+        KeychainService.storeCredentials(username: username, password: password)
     }
 
     func logout() async {
@@ -120,6 +167,7 @@ class APIService: ObservableObject {
         }
         self.token = nil
         self.currentUser = nil
+        KeychainService.clearCredentials()
     }
 
     // MARK: - Devices
