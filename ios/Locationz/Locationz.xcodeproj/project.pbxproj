@@ -20,6 +20,7 @@
 		8A1B2C3D4E5F60718293A4C5 /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C5 /* LocationService.swift */; };
 		8A1B2C3D4E5F60718293A4D2 /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D3 /* Log.swift */; };
 		8A1B2C3D4E5F60718293A4D4 /* BluetoothService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D5 /* BluetoothService.swift */; };
+		8A1B2C3D4E5F60718293A4D6 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4D6 /* KeychainService.swift */; };
 		8A1B2C3D4E5F60718293A4C6 /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C6 /* User.swift */; };
 		8A1B2C3D4E5F60718293A4C7 /* Device.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C7 /* Device.swift */; };
 		8A1B2C3D4E5F60718293A4C8 /* LocationPoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70819203A4C8 /* LocationPoint.swift */; };
@@ -54,6 +55,7 @@
 		1A2B3C4D5E6F70819203A4C5 /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4D3 /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4D5 /* BluetoothService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothService.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F70819203A4D6 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4C6 /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4C7 /* Device.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Device.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70819203A4C8 /* LocationPoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPoint.swift; sourceTree = "<group>"; };
@@ -149,6 +151,7 @@
 			children = (
 				1A2B3C4D5E6F70819203A4C4 /* APIService.swift */,
 				1A2B3C4D5E6F70819203A4D5 /* BluetoothService.swift */,
+				1A2B3C4D5E6F70819203A4D6 /* KeychainService.swift */,
 				1A2B3C4D5E6F70819203A4C5 /* LocationService.swift */,
 				1A2B3C4D5E6F70819203A4D3 /* Log.swift */,
 			);
@@ -267,6 +270,7 @@
 				8A1B2C3D4E5F60718293A4C5 /* LocationService.swift in Sources */,
 				8A1B2C3D4E5F60718293A4D2 /* Log.swift in Sources */,
 				8A1B2C3D4E5F60718293A4D4 /* BluetoothService.swift in Sources */,
+				8A1B2C3D4E5F60718293A4D6 /* KeychainService.swift in Sources */,
 				8A1B2C3D4E5F60718293A4C6 /* User.swift in Sources */,
 				8A1B2C3D4E5F60718293A4C7 /* Device.swift in Sources */,
 				8A1B2C3D4E5F60718293A4C8 /* LocationPoint.swift in Sources */,
