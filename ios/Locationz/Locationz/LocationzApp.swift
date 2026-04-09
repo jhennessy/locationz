@@ -9,6 +9,9 @@ struct LocationzApp: App {
     /// the app is relaunched in the background by a geofence event after jetsam.
     private let locationService = LocationService.shared
 
+    /// Initialize WatchConnectivity to sync credentials with Apple Watch.
+    private let phoneConnectivity = PhoneConnectivityService.shared
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -18,6 +21,7 @@ struct LocationzApp: App {
                     case .active:
                         Log.lifecycle.notice("App became active")
                         LocationService.shared.handleForegroundTransition()
+                        PhoneConnectivityService.shared.sendCredentialsToWatch()
                     case .inactive:
                         Log.lifecycle.notice("App became inactive")
                     case .background:
