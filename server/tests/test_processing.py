@@ -1,10 +1,15 @@
 """Tests for the stateful visit detection algorithm."""
 
 import datetime
+import threading
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from database import Base
 from processing import (
     haversine_m,
     snap_to_place,
@@ -16,7 +21,8 @@ from processing import (
     MIN_VISIT_DURATION_S,
     MAX_HORIZONTAL_ACCURACY_M,
 )
-from models import DeviceState, Location, Place, Visit
+from auth import hash_password
+from models import DeviceState, Device, Location, Place, User, Visit
 from tests.gps_test_fixtures import (
     GPS_TRACE,
     HOME_CENTER,
@@ -360,3 +366,146 @@ class TestReprocessAll:
         result = reprocess_all(db, test_user.id)
         open_visits = db.query(Visit).filter(Visit.is_open == True).count()
         assert open_visits == 0
+
+
+# =====================================================================
+# Robustness regression tests
+# =====================================================================
+
+class TestStuckStateRecovery:
+    """If a DeviceState ever ends up with state != 'stationary' but a non-None
+    open_visit_id (e.g. from a historical concurrent-write race), the moving→
+    stationary promote guard would refuse to fire — and the device would never
+    detect another visit. The state machine must self-heal on entry.
+    """
+
+    @patch("processing.reverse_geocode", return_value="Test Address")
+    def test_orphan_open_visit_id_does_not_block_promotion(
+        self, mock_geocode, db, test_user, test_device
+    ):
+        # Create a closed visit then point a 'moving' state at it as orphan.
+        place = Place(user_id=test_user.id, latitude=51.92, longitude=-8.69, address="Old")
+        db.add(place)
+        db.flush()
+        orphan = Visit(
+            device_id=test_device.id,
+            place_id=place.id,
+            latitude=51.92,
+            longitude=-8.69,
+            arrival=_t(-1000),
+            departure=_t(-900),
+            duration_seconds=6000,
+            is_open=True,  # marked open even though state thinks we moved on
+        )
+        db.add(orphan)
+        db.flush()
+
+        state = DeviceState(
+            device_id=test_device.id,
+            state="moving",
+            anchor_latitude=47.382,
+            anchor_longitude=8.496,
+            arrived_at=_t(0),
+            last_confirmed_at=_t(0),
+            open_visit_id=orphan.id,  # stale
+        )
+        db.add(state)
+        db.flush()
+
+        # Feed a normal stationary cluster — should still promote.
+        locs = [
+            _make_location(37.7615, -122.4240, _t(0), test_device.id),
+            _make_location(37.7615, -122.4241, _t(3), test_device.id),
+            _make_location(37.7616, -122.4240, _t(6), test_device.id),
+        ]
+        for loc in locs:
+            db.add(loc)
+        db.flush()
+
+        thresholds = {"visit_radius_m": 50.0, "min_visit_duration_s": 300, "place_snap_radius_m": 75.0, "max_horizontal_accuracy_m": 100.0}
+        visits = _run_state_machine(
+            db, state, locs, test_user.id, test_device.id,
+            50.0, 150.0, 300, 100.0, thresholds,
+        )
+
+        assert len(visits) == 1, "stale open_visit_id must not block new promotion"
+        assert state.state == "stationary"
+        # The orphan visit was closed by the recovery path.
+        db.refresh(orphan)
+        assert orphan.is_open is False
+
+
+class TestConcurrentBatchUploads:
+    """Two batches arriving for the same device within a few ms must not both
+    promote the same cluster and create duplicate Place + Visit rows. This
+    reproduces the production race that left identical Place 87/88 (same
+    coords, same address) and an orphan-open Visit pointing at the loser.
+    """
+
+    @patch("processing.reverse_geocode", return_value="Concurrent Test")
+    def test_two_simultaneous_batches_do_not_duplicate(self, mock_geocode):
+        # Need a shared in-memory DB across threads — StaticPool keeps one connection.
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+
+        # Seed user + device
+        seed = Session()
+        user = User(username="u", email="u@e.com", password_hash=hash_password("p"))
+        seed.add(user)
+        seed.commit()
+        device = Device(name="D", identifier="d", user_id=user.id)
+        seed.add(device)
+        seed.commit()
+        user_id = user.id
+        device_id = device.id
+
+        # Seed enough points to trigger a promote (>5 min cluster at one spot)
+        base = datetime.datetime(2024, 1, 15, 8, 0, 0)
+        for mins in (0, 2, 4, 6, 8):
+            seed.add(Location(
+                device_id=device_id,
+                latitude=51.92316,
+                longitude=-8.69376,
+                horizontal_accuracy=10.0,
+                timestamp=base + datetime.timedelta(minutes=mins),
+            ))
+        seed.commit()
+        seed.close()
+
+        # Two threads call process_device_locations concurrently.
+        results: list[int] = []
+        errors: list[Exception] = []
+        barrier = threading.Barrier(2)
+
+        def worker():
+            try:
+                sess = Session()
+                barrier.wait()  # release both threads at exactly the same time
+                visits = process_device_locations(sess, device_id, user_id)
+                results.append(len(visits))
+                sess.close()
+            except Exception as e:  # pragma: no cover - surfaced via assertion below
+                errors.append(e)
+
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        assert not errors, f"threads raised: {errors}"
+
+        check = Session()
+        try:
+            places = check.query(Place).filter(Place.user_id == user_id).all()
+            visits = check.query(Visit).filter(Visit.device_id == device_id).all()
+            open_visits = [v for v in visits if v.is_open]
+            assert len(places) == 1, f"expected 1 place, got {len(places)} (race regression)"
+            assert len(visits) == 1, f"expected 1 visit, got {len(visits)} (race regression)"
+            assert len(open_visits) <= 1
+        finally:
+            check.close()

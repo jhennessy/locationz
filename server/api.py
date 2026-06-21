@@ -395,12 +395,14 @@ def get_visits(
 
     query = db.query(Visit).filter(Visit.device_id == device_id)
 
+    # Filter by overlap with [start, end): include any visit whose interval
+    # intersects the window, so an overnight stay shows on both days it touches.
     if start_date:
         try:
             start = datetime.datetime.fromisoformat(start_date)
             if start.tzinfo is not None:
                 start = start.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-            query = query.filter(Visit.arrival >= start)
+            query = query.filter(Visit.departure >= start)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid start_date format (use ISO 8601)")
     if end_date:

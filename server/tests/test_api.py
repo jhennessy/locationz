@@ -264,6 +264,61 @@ class TestVisitEndpoints:
         resp = client.get("/api/visits/9999", headers=auth_headers)
         assert resp.status_code == 404
 
+    def test_overnight_visit_shows_on_both_days(self, client, auth_headers, app_and_db):
+        """A visit that spans midnight should be returned by either day's window.
+
+        Regression: previously the filter was `arrival in [start, end)`, which
+        hid overnight stays from the morning's view. The filter is now an
+        overlap test, so the same visit appears under both days it touches.
+        """
+        _, _, TestSession = app_and_db
+        resp = client.post("/api/devices", json={"name": "OV", "identifier": "ov-test"}, headers=auth_headers)
+        device_id = resp.json()["id"]
+
+        # Insert an overnight visit directly (no need to run the full pipeline)
+        session = TestSession()
+        place = Place(user_id=1, latitude=47.3823, longitude=8.4966, address="Home")
+        session.add(place)
+        session.flush()
+        visit = Visit(
+            device_id=device_id,
+            place_id=place.id,
+            latitude=47.3823,
+            longitude=8.4966,
+            arrival=datetime.datetime(2024, 6, 17, 22, 0, 0),
+            departure=datetime.datetime(2024, 6, 18, 7, 30, 0),
+            duration_seconds=34_200,
+            address="Home",
+            is_open=False,
+        )
+        session.add(visit)
+        session.commit()
+        session.close()
+
+        # Day 1 (2024-06-17): visit arrived this day → must be returned
+        resp1 = client.get(
+            f"/api/visits/{device_id}?start_date=2024-06-17T00:00:00&end_date=2024-06-18T00:00:00",
+            headers=auth_headers,
+        )
+        assert resp1.status_code == 200
+        assert len(resp1.json()) == 1
+
+        # Day 2 (2024-06-18): visit departed this day → must ALSO be returned
+        resp2 = client.get(
+            f"/api/visits/{device_id}?start_date=2024-06-18T00:00:00&end_date=2024-06-19T00:00:00",
+            headers=auth_headers,
+        )
+        assert resp2.status_code == 200
+        assert len(resp2.json()) == 1
+
+        # A day with no overlap should return nothing
+        resp3 = client.get(
+            f"/api/visits/{device_id}?start_date=2024-06-19T00:00:00&end_date=2024-06-20T00:00:00",
+            headers=auth_headers,
+        )
+        assert resp3.status_code == 200
+        assert resp3.json() == []
+
 
 # ---------------------------------------------------------------------------
 # Session / auth robustness tests

@@ -16,7 +16,9 @@ import datetime
 import logging
 import math
 import statistics
+import threading
 import time
+from collections import defaultdict
 from typing import Optional
 
 import requests
@@ -25,6 +27,10 @@ from sqlalchemy.orm import Session
 from models import Config, Device, DeviceState, Location, Place, Visit
 
 logger = logging.getLogger(__name__)
+
+# Per-device lock: serialize visit detection so concurrent batch uploads for
+# the same device can't both promote the same cluster into separate visits.
+_device_locks: dict[int, threading.Lock] = defaultdict(threading.Lock)
 
 # ---------------------------------------------------------------------------
 # Configuration (data-driven defaults from GPS scatter analysis)
@@ -81,40 +87,44 @@ def process_device_locations(
     gets its departure updated as new confirming points arrive.  The visit is
     finalized only when the user departs (a point far from the anchor).
     """
-    if thresholds is None:
-        thresholds = get_thresholds(db)
+    # Serialize on a per-device lock. Concurrent batch uploads for the same
+    # device would otherwise both read the same DeviceState, both promote the
+    # cluster, and both create a duplicate Place + Visit before either commits.
+    with _device_locks[device_id]:
+        if thresholds is None:
+            thresholds = get_thresholds(db)
 
-    radius = thresholds.get("visit_radius_m", VISIT_RADIUS_M)
-    lifecycle_radius = radius * 3  # ~150m for lifecycle GPS drift
-    min_duration = thresholds.get("min_visit_duration_s", MIN_VISIT_DURATION_S)
-    max_accuracy = thresholds.get("max_horizontal_accuracy_m", MAX_HORIZONTAL_ACCURACY_M)
+        radius = thresholds.get("visit_radius_m", VISIT_RADIUS_M)
+        lifecycle_radius = radius * 3  # ~150m for lifecycle GPS drift
+        min_duration = thresholds.get("min_visit_duration_s", MIN_VISIT_DURATION_S)
+        max_accuracy = thresholds.get("max_horizontal_accuracy_m", MAX_HORIZONTAL_ACCURACY_M)
 
-    # Get or create device state
-    state = db.query(DeviceState).filter(DeviceState.device_id == device_id).first()
-    if not state:
-        state = DeviceState(device_id=device_id, state="unknown")
-        db.add(state)
-        db.flush()
+        # Get or create device state
+        state = db.query(DeviceState).filter(DeviceState.device_id == device_id).first()
+        if not state:
+            state = DeviceState(device_id=device_id, state="unknown")
+            db.add(state)
+            db.flush()
 
-    # Fetch new locations since last processed point
-    since = state.last_confirmed_at or datetime.datetime.min
-    raw_locations = (
-        db.query(Location)
-        .filter(Location.device_id == device_id, Location.timestamp > since)
-        .order_by(Location.timestamp.asc())
-        .all()
-    )
+        # Fetch new locations since last processed point
+        since = state.last_confirmed_at or datetime.datetime.min
+        raw_locations = (
+            db.query(Location)
+            .filter(Location.device_id == device_id, Location.timestamp > since)
+            .order_by(Location.timestamp.asc())
+            .all()
+        )
 
-    if not raw_locations:
-        return []
+        if not raw_locations:
+            return []
 
-    new_visits = _run_state_machine(
-        db, state, raw_locations, user_id, device_id,
-        radius, lifecycle_radius, min_duration, max_accuracy, thresholds,
-    )
+        new_visits = _run_state_machine(
+            db, state, raw_locations, user_id, device_id,
+            radius, lifecycle_radius, min_duration, max_accuracy, thresholds,
+        )
 
-    db.commit()
-    return new_visits
+        db.commit()
+        return new_visits
 
 
 def _run_state_machine(
@@ -131,6 +141,16 @@ def _run_state_machine(
 ) -> list[Visit]:
     """Core state machine: process a sequence of locations and update DeviceState."""
     new_visits = []
+
+    # Defensive: a non-stationary state should never carry an open_visit_id.
+    # If we find one (e.g. from a historical concurrent-write bug), clear it
+    # so the moving→stationary promote guard can fire again.
+    if state.state != "stationary" and state.open_visit_id is not None:
+        stale_visit = db.query(Visit).filter(Visit.id == state.open_visit_id).first()
+        if stale_visit and stale_visit.is_open:
+            stale_visit.is_open = False
+        state.open_visit_id = None
+
     # Collect non-lifecycle points for centroid computation of current cluster
     cluster_lats: list[float] = []
     cluster_lons: list[float] = []
