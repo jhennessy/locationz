@@ -338,26 +338,114 @@ def upload_locations(batch: LocationBatch, user: User = Depends(get_current_user
     return BatchResponse(received=len(batch.locations), batch_id=batch_id, visits_detected=len(new_visits))
 
 
+# Route cleaning thresholds. Derived from a study of ~230k real GPS samples
+# on the production DB:
+#  - 99.85% of points are <100m accuracy; the long tail goes up to 149_000m.
+#  - Inter-point implied speeds <360 km/h are routinely real (driving, planes).
+#    At 3600 km/h (1000 m/s) only 0.08% of transitions remain, and none of
+#    those are real transport — that's the GPS-teleport floor.
+_ROUTE_MAX_ACCURACY_M = 100.0     # matches processing.MAX_HORIZONTAL_ACCURACY_M
+_ROUTE_MAX_SPEED_MPS = 1000.0     # 3600 km/h: above any real transport, catches teleports
+
+
+def _clean_route(locations):
+    """Drop bad-accuracy points and teleport spikes from a chronological list."""
+    cleaned = []
+    for loc in locations:
+        if loc.horizontal_accuracy is not None and loc.horizontal_accuracy > _ROUTE_MAX_ACCURACY_M:
+            continue
+        if cleaned:
+            prev = cleaned[-1]
+            if loc.latitude == prev.latitude and loc.longitude == prev.longitude:
+                continue  # exact duplicate from lifecycle dedup
+            dt = (loc.timestamp - prev.timestamp).total_seconds()
+            if dt > 0:
+                # Haversine inline to avoid importing from processing (cyclic risk).
+                import math
+                rlat1, rlat2 = math.radians(prev.latitude), math.radians(loc.latitude)
+                dlat = math.radians(loc.latitude - prev.latitude)
+                dlon = math.radians(loc.longitude - prev.longitude)
+                a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
+                dist = 6_371_000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+                if dist / dt > _ROUTE_MAX_SPEED_MPS:
+                    continue  # teleport — keep prev, drop this spike
+        cleaned.append(loc)
+    return cleaned
+
+
 @router.get("/locations/{device_id}")
 def get_locations(
     device_id: int,
-    limit: int = 100,
+    limit: Optional[int] = None,
     offset: int = 0,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    exclude_lifecycle: bool = False,
+    max_points: Optional[int] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Return raw GPS locations for a device.
+
+    Date filtering and downsampling are intended for route rendering: pass
+    start_date/end_date to bound a single day, exclude_lifecycle=true to drop
+    geofence/state-change rows, and max_points to cap the response with even
+    Nth-point downsampling.
+    """
     device = db.query(Device).filter(Device.id == device_id, Device.user_id == user.id).first()
     if not device:
         raise HTTPException(status_code=404, detail="Device not found or not owned by user")
 
-    locations = (
-        db.query(Location)
-        .filter(Location.device_id == device_id)
-        .order_by(Location.timestamp.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    query = db.query(Location).filter(Location.device_id == device_id)
+    if start_date:
+        try:
+            start = datetime.datetime.fromisoformat(start_date)
+            if start.tzinfo is not None:
+                start = start.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            query = query.filter(Location.timestamp >= start)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_date format (use ISO 8601)")
+    if end_date:
+        try:
+            end = datetime.datetime.fromisoformat(end_date)
+            if end.tzinfo is not None:
+                end = end.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            query = query.filter(Location.timestamp < end)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_date format (use ISO 8601)")
+    if exclude_lifecycle:
+        query = query.filter(Location.notes.is_(None))
+
+    # When a date range is supplied the natural order is chronological so the
+    # caller can draw a polyline directly. Otherwise preserve the historical
+    # "most recent first" behaviour.
+    if start_date or end_date:
+        query = query.order_by(Location.timestamp.asc())
+    else:
+        query = query.order_by(Location.timestamp.desc())
+
+    # A bounded date range can safely return more rows; otherwise keep the
+    # historical small page so unfiltered queries don't dump the whole table.
+    effective_limit = limit if limit is not None else (10_000 if (start_date or end_date) else 100)
+    locations = query.offset(offset).limit(effective_limit).all()
+
+    # Route cleanup: only applied when the caller is asking for a date-bounded
+    # range AND has excluded lifecycle rows (i.e. it's drawing a path, not
+    # auditing raw data). Data analysis of ~230k real points showed: 99.85%
+    # are <100m accuracy, but a long tail goes up to 149_000m (kilometres of
+    # uncertainty). And rare GPS "teleports" produce single-point jumps of
+    # >900m in 1s — visible as straight-line spikes on the map.
+    if exclude_lifecycle and (start_date or end_date):
+        locations = _clean_route(locations)
+
+    if max_points and len(locations) > max_points:
+        # Even Nth-point downsample, always keeping the last point so the
+        # route ends where the day ends.
+        step = max(1, len(locations) // max_points)
+        kept = locations[::step]
+        if kept and kept[-1].id != locations[-1].id:
+            kept.append(locations[-1])
+        locations = kept
 
     return [
         {

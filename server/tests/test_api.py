@@ -319,6 +319,57 @@ class TestVisitEndpoints:
         assert resp3.status_code == 200
         assert resp3.json() == []
 
+    def test_route_endpoint_drops_outliers(self, client, auth_headers, app_and_db):
+        """When fetched with exclude_lifecycle=true and a date range, the
+        endpoint cleans bad-accuracy points, exact duplicates, and teleport
+        jumps so the iOS route polyline isn't ruined by single bad fixes.
+        """
+        _, _, TestSession = app_and_db
+        resp = client.post("/api/devices", json={"name": "R", "identifier": "r-test"}, headers=auth_headers)
+        device_id = resp.json()["id"]
+
+        session = TestSession()
+        base = datetime.datetime(2024, 6, 20, 9, 0, 0)
+        # Good 100m-apart points along a slow walk: ~1m/s, well under threshold
+        good = [
+            (47.3823, 8.4966, 10.0, base),
+            (47.3823, 8.4967, 10.0, base + datetime.timedelta(seconds=60)),  # ~7m east
+            (47.3824, 8.4967, 10.0, base + datetime.timedelta(seconds=120)),
+        ]
+        # Bad-accuracy point that must be dropped
+        bad_acc = (47.3900, 8.5000, 800.0, base + datetime.timedelta(seconds=150))
+        # Exact duplicate of the last good point
+        dupe = (47.3824, 8.4967, 10.0, base + datetime.timedelta(seconds=180))
+        # GPS-teleport spike: ~3 degrees away in 1s — only physically achievable
+        # if the satellites lied to us. Threshold is 1000 m/s so this clearly trips it.
+        teleport = (50.0, 12.0, 10.0, base + datetime.timedelta(seconds=181))
+        # Recovery: back near the path
+        recovery = (47.3825, 8.4967, 10.0, base + datetime.timedelta(seconds=240))
+
+        for lat, lon, acc, ts in good + [bad_acc, dupe, teleport, recovery]:
+            session.add(Location(
+                device_id=device_id,
+                latitude=lat, longitude=lon,
+                horizontal_accuracy=acc,
+                timestamp=ts,
+            ))
+        session.commit()
+        session.close()
+
+        resp = client.get(
+            f"/api/locations/{device_id}"
+            f"?start_date=2024-06-20T00:00:00&end_date=2024-06-21T00:00:00"
+            f"&exclude_lifecycle=true",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        points = resp.json()
+        # 3 good + recovery = 4 expected; dupes/teleport/bad-acc all dropped.
+        assert len(points) == 4, f"expected 4 cleaned points, got {len(points)}: {points}"
+        accs = [p["latitude"] for p in points]
+        assert 47.3900 not in accs, "bad-accuracy point should have been dropped"
+        assert 50.0 not in accs, "teleport point should have been dropped"
+
 
 # ---------------------------------------------------------------------------
 # Session / auth robustness tests

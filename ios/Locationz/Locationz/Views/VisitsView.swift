@@ -6,6 +6,7 @@ struct VisitsView: View {
     @ObservedObject var locationService = LocationService.shared
 
     @State private var visits: [VisitInfo] = []
+    @State private var routeCoordinates: [CLLocationCoordinate2D] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var cameraPosition: MapCameraPosition = .automatic
@@ -97,6 +98,13 @@ struct VisitsView: View {
 
     private var mapSection: some View {
         Map(position: $cameraPosition) {
+            // Route polyline — only drawn in the single-day view, where the
+            // server has cleaned the trace down to a useful number of points.
+            if !showAllVisits, routeCoordinates.count >= 2 {
+                MapPolyline(coordinates: routeCoordinates)
+                    .stroke(.blue.opacity(0.7), lineWidth: 4)
+            }
+
             ForEach(Array(visitsByPlace.keys.sorted()), id: \.self) { placeId in
                 if let placeVisits = visitsByPlace[placeId],
                    let representative = placeVisits.first {
@@ -301,6 +309,7 @@ struct VisitsView: View {
             return
         }
         isLoading = true
+        routeCoordinates = []
 
         do {
             if showAllVisits {
@@ -313,6 +322,20 @@ struct VisitsView: View {
                     startDate: selectedDate,
                     endDate: endOfDay
                 )
+                // Best-effort route fetch — failures here shouldn't block the
+                // visit list, so swallow and just leave routeCoordinates empty.
+                do {
+                    let route = try await api.fetchRoute(
+                        deviceId: deviceId,
+                        startDate: selectedDate,
+                        endDate: endOfDay
+                    )
+                    routeCoordinates = route.map {
+                        CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                    }
+                } catch {
+                    routeCoordinates = []
+                }
             }
             // Sort earliest first
             visits.sort { ($0.arrivalDate ?? .distantPast) < ($1.arrivalDate ?? .distantPast) }

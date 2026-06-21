@@ -214,6 +214,39 @@ class APIService: ObservableObject {
         return try JSONDecoder().decode(BatchResponse.self, from: data)
     }
 
+    // MARK: - Route (raw GPS points between visits)
+
+    /// A single GPS sample as returned by the server. Only the fields the
+    /// map renderer needs are decoded; the server may include more.
+    struct RoutePoint: Decodable {
+        let latitude: Double
+        let longitude: Double
+        let timestamp: String
+        let horizontalAccuracy: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case latitude, longitude, timestamp
+            case horizontalAccuracy = "horizontal_accuracy"
+        }
+    }
+
+    func fetchRoute(
+        deviceId: Int,
+        startDate: Date,
+        endDate: Date,
+        maxPoints: Int = 2000
+    ) async throws -> [RoutePoint] {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let path = "/api/locations/\(deviceId)"
+            + "?start_date=\(formatter.string(from: startDate))"
+            + "&end_date=\(formatter.string(from: endDate))"
+            + "&exclude_lifecycle=true"
+            + "&max_points=\(maxPoints)"
+        let data = try await makeRequest(path: path, method: "GET")
+        return try JSONDecoder().decode([RoutePoint].self, from: data)
+    }
+
     // MARK: - Visits
 
     func fetchVisits(deviceId: Int, limit: Int = 100, startDate: Date? = nil, endDate: Date? = nil) async throws -> [VisitInfo] {
