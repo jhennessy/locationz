@@ -5,7 +5,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
@@ -16,6 +16,25 @@ except OSError:
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{os.path.join(DATA_DIR, 'locations.db')}")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+
+@event.listens_for(engine, "connect")
+def _enable_sqlite_wal(dbapi_conn, _):
+    """Enable WAL + reasonable wait-on-locked behaviour for every new connection.
+
+    WAL lets readers proceed while a writer holds the lock — uploads and visit
+    fetches no longer block during a long regenerate.  The busy_timeout makes
+    the rare writer-vs-writer case retry for up to 5s instead of erroring out.
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.close()
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
