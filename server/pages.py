@@ -1221,26 +1221,43 @@ def _render_algorithm_tab(current_user):
         jdb.commit()
         jdb.refresh(job)
         job_id = job.id
+
+        # Sweep every active user with at least one device.
+        target_user_ids = [
+            uid for (uid,) in jdb.query(User.id).filter(User.is_active == True).all()  # noqa: E712
+        ]
         jdb.close()
 
         render_journal()
-        ui.notify("Regeneration started...", type="info")
+        ui.notify(f"Regenerating {len(target_user_ids)} user(s)...", type="info")
 
+        total_visits = 0
+        total_places = 0
+        per_user: list[str] = []
         try:
-            rdb = SessionLocal()
-            result = reprocess_all(rdb, current_user.id)
+            for uid in target_user_ids:
+                rdb = SessionLocal()
+                try:
+                    result = reprocess_all(rdb, uid)
+                    total_visits += result["visits_created"]
+                    total_places += result["places_created"]
+                    per_user.append(f"user={uid}: {result['visits_created']}v/{result['places_created']}p")
+                finally:
+                    rdb.close()
 
-            job = rdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
+            wdb = SessionLocal()
+            job = wdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
             job.status = "completed"
             job.finished_at = dt.datetime.utcnow()
-            job.visits_created = result["visits_created"]
-            job.places_created = result["places_created"]
-            rdb.commit()
-            rdb.close()
+            job.visits_created = total_visits
+            job.places_created = total_places
+            job.error_message = "; ".join(per_user) if per_user else None
+            wdb.commit()
+            wdb.close()
 
             ui.notify(
-                f"Regeneration complete: {result['visits_created']} visits, "
-                f"{result['places_created']} places",
+                f"Regeneration complete across {len(target_user_ids)} user(s): "
+                f"{total_visits} visits, {total_places} places",
                 type="positive",
             )
         except Exception as e:
