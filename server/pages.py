@@ -1208,8 +1208,64 @@ def _render_algorithm_tab(current_user):
 
         jdb.close()
 
+    # Shared between the worker thread and the UI poller. Owned by the page so
+    # it doesn't leak across user sessions.
+    progress: dict = {"running": False}
+
+    def _regenerate_worker(job_id: int, target_user_ids: list[int]):
+        import datetime as dt
+        import time
+
+        total_visits = 0
+        total_places = 0
+        per_user: list[str] = []
+        try:
+            for idx, uid in enumerate(target_user_ids):
+                progress["current_user_id"] = uid
+                progress["users_done"] = idx
+                rdb = SessionLocal()
+                try:
+                    result = reprocess_all(rdb, uid)
+                    total_visits += result["visits_created"]
+                    total_places += result["places_created"]
+                    per_user.append(f"user={uid}: {result['visits_created']}v/{result['places_created']}p")
+                    progress["visits"] = total_visits
+                    progress["places"] = total_places
+                finally:
+                    rdb.close()
+            progress["users_done"] = len(target_user_ids)
+
+            wdb = SessionLocal()
+            job = wdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
+            job.status = "completed"
+            job.finished_at = dt.datetime.utcnow()
+            job.visits_created = total_visits
+            job.places_created = total_places
+            job.error_message = "; ".join(per_user) if per_user else None
+            wdb.commit()
+            wdb.close()
+        except Exception as e:
+            progress["error"] = str(e)
+            wdb = SessionLocal()
+            job = wdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
+            if job:
+                job.status = "failed"
+                job.finished_at = dt.datetime.utcnow()
+                job.error_message = str(e)
+                wdb.commit()
+            wdb.close()
+        finally:
+            progress["finished_at"] = time.monotonic()
+            progress["running"] = False
+
     def do_regenerate():
         import datetime as dt
+        import threading
+        import time
+
+        if progress.get("running"):
+            ui.notify("Regeneration already running", type="warning")
+            return
 
         jdb = SessionLocal()
         job = ReprocessingJob(
@@ -1222,56 +1278,68 @@ def _render_algorithm_tab(current_user):
         jdb.refresh(job)
         job_id = job.id
 
-        # Sweep every active user with at least one device.
         target_user_ids = [
             uid for (uid,) in jdb.query(User.id).filter(User.is_active == True).all()  # noqa: E712
         ]
         jdb.close()
 
-        render_journal()
-        ui.notify(f"Regenerating {len(target_user_ids)} user(s)...", type="info")
-
-        total_visits = 0
-        total_places = 0
-        per_user: list[str] = []
-        try:
-            for uid in target_user_ids:
-                rdb = SessionLocal()
-                try:
-                    result = reprocess_all(rdb, uid)
-                    total_visits += result["visits_created"]
-                    total_places += result["places_created"]
-                    per_user.append(f"user={uid}: {result['visits_created']}v/{result['places_created']}p")
-                finally:
-                    rdb.close()
-
-            wdb = SessionLocal()
-            job = wdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
-            job.status = "completed"
-            job.finished_at = dt.datetime.utcnow()
-            job.visits_created = total_visits
-            job.places_created = total_places
-            job.error_message = "; ".join(per_user) if per_user else None
-            wdb.commit()
-            wdb.close()
-
-            ui.notify(
-                f"Regeneration complete across {len(target_user_ids)} user(s): "
-                f"{total_visits} visits, {total_places} places",
-                type="positive",
-            )
-        except Exception as e:
-            rdb = SessionLocal()
-            job = rdb.query(ReprocessingJob).filter(ReprocessingJob.id == job_id).first()
-            if job:
-                job.status = "failed"
-                job.finished_at = dt.datetime.utcnow()
-                job.error_message = str(e)
-                rdb.commit()
-            rdb.close()
-            ui.notify(f"Regeneration failed: {e}", type="negative")
+        progress.clear()
+        progress.update({
+            "running": True,
+            "users_total": len(target_user_ids),
+            "users_done": 0,
+            "visits": 0,
+            "places": 0,
+            "started_at": time.monotonic(),
+            "last_notify_at": time.monotonic(),
+            "error": None,
+            "finished_at": None,
+        })
 
         render_journal()
+        ui.notify(f"Regenerating {len(target_user_ids)} user(s) in background...", type="info")
+
+        threading.Thread(
+            target=_regenerate_worker,
+            args=(job_id, target_user_ids),
+            daemon=True,
+        ).start()
+
+        # Poll worker progress on the UI loop. Emits a notification every 10s
+        # of wall-clock once the job has been running that long; cancels itself
+        # when the worker finishes.
+        def tick():
+            now = time.monotonic()
+            running = progress.get("running")
+            elapsed = now - progress.get("started_at", now)
+            total = progress.get("users_total", 0)
+            done = progress.get("users_done", 0)
+            pct = int(done / total * 100) if total else 0
+
+            if running:
+                if elapsed >= 10 and (now - progress.get("last_notify_at", now)) >= 10:
+                    progress["last_notify_at"] = now
+                    ui.notify(
+                        f"Regenerating: {pct}% ({done}/{total} users, "
+                        f"{progress.get('visits', 0)} visits so far)",
+                        type="ongoing",
+                    )
+                return  # keep polling
+
+            # Worker finished — final notification + cleanup.
+            timer.cancel()
+            err = progress.get("error")
+            if err:
+                ui.notify(f"Regeneration failed: {err}", type="negative")
+            else:
+                ui.notify(
+                    f"Regeneration complete: {progress.get('visits', 0)} visits, "
+                    f"{progress.get('places', 0)} places across {total} user(s)",
+                    type="positive",
+                )
+            render_journal()
+
+        timer = ui.timer(2.0, tick)
 
     ui.button("Regenerate All Data", on_click=do_regenerate).props("color=negative icon=refresh")
     ui.label("").classes("q-mb-md")
