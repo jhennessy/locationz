@@ -1307,37 +1307,47 @@ def _render_algorithm_tab(current_user):
 
         # Poll worker progress on the UI loop. Emits a notification every 10s
         # of wall-clock once the job has been running that long; cancels itself
-        # when the worker finishes.
+        # when the worker finishes. If the page client has been disposed (user
+        # navigated away), ui.notify will throw — swallow it so the worker is
+        # unaffected and the timer simply stops.
         def tick():
-            now = time.monotonic()
-            running = progress.get("running")
-            elapsed = now - progress.get("started_at", now)
-            total = progress.get("users_total", 0)
-            done = progress.get("users_done", 0)
-            pct = int(done / total * 100) if total else 0
+            try:
+                now = time.monotonic()
+                running = progress.get("running")
+                elapsed = now - progress.get("started_at", now)
+                total = progress.get("users_total", 0)
+                done = progress.get("users_done", 0)
+                pct = int(done / total * 100) if total else 0
 
-            if running:
-                if elapsed >= 10 and (now - progress.get("last_notify_at", now)) >= 10:
-                    progress["last_notify_at"] = now
+                if running:
+                    if elapsed >= 10 and (now - progress.get("last_notify_at", now)) >= 10:
+                        progress["last_notify_at"] = now
+                        ui.notify(
+                            f"Regenerating: {pct}% ({done}/{total} users, "
+                            f"{progress.get('visits', 0)} visits so far)",
+                            type="ongoing",
+                        )
+                    return  # keep polling
+
+                # Worker finished — final notification + cleanup.
+                timer.cancel()
+                err = progress.get("error")
+                if err:
+                    ui.notify(f"Regeneration failed: {err}", type="negative")
+                else:
                     ui.notify(
-                        f"Regenerating: {pct}% ({done}/{total} users, "
-                        f"{progress.get('visits', 0)} visits so far)",
-                        type="ongoing",
+                        f"Regeneration complete: {progress.get('visits', 0)} visits, "
+                        f"{progress.get('places', 0)} places across {total} user(s)",
+                        type="positive",
                     )
-                return  # keep polling
-
-            # Worker finished — final notification + cleanup.
-            timer.cancel()
-            err = progress.get("error")
-            if err:
-                ui.notify(f"Regeneration failed: {err}", type="negative")
-            else:
-                ui.notify(
-                    f"Regeneration complete: {progress.get('visits', 0)} visits, "
-                    f"{progress.get('places', 0)} places across {total} user(s)",
-                    type="positive",
-                )
-            render_journal()
+                render_journal()
+            except Exception:
+                # Page client disposed (user navigated away). The worker keeps
+                # running and finishes its DB writes regardless.
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
 
         timer = ui.timer(2.0, tick)
 
