@@ -85,8 +85,9 @@ def _nav_link(icon: str, label: str, href: str):
 
 
 def _nav_drawer(user=None):
-    """Shared left-drawer navigation."""
-    with ui.left_drawer().classes("bg-blue-1"):
+    """Shared left-drawer navigation. Returns the drawer so the header can toggle it on mobile."""
+    drawer = ui.left_drawer().classes("bg-blue-1")
+    with drawer:
         ui.label("Locationz").classes("text-h6 q-pa-sm q-mb-sm")
         _nav_link("dashboard", "Dashboard", "/")
         _nav_link("phone_iphone", "Devices", "/devices")
@@ -99,16 +100,20 @@ def _nav_drawer(user=None):
         if user and user.is_admin:
             _nav_link("admin_panel_settings", "Admin", "/admin")
             _nav_link("article", "Logs", "/logs")
+    return drawer
 
 
-def _header(user):
-    """Shared header with logout."""
+def _header(user, drawer=None):
+    """Shared header with hamburger menu (mobile) and logout."""
     def logout():
         app.storage.user.clear()
         ui.navigate.to("/login")
 
     with ui.header().classes("items-center justify-between"):
-        ui.label("Locationz").classes("text-h6")
+        with ui.row().classes("items-center gap-2"):
+            if drawer is not None:
+                ui.button(icon="menu", on_click=drawer.toggle).props("flat color=white round dense")
+            ui.label("Locationz").classes("text-h6")
         with ui.row().classes("items-center"):
             ui.label(f"Logged in as {user.username}")
             ui.button("Logout", on_click=logout).props("flat color=white")
@@ -221,8 +226,8 @@ async def dashboard_page():
         ui.navigate.to("/login")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Dashboard").classes("text-h5 q-mb-md")
@@ -317,8 +322,8 @@ async def devices_page():
         ui.navigate.to("/login")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Device Management").classes("text-h5 q-mb-md")
@@ -411,8 +416,8 @@ async def map_page():
         ui.navigate.to("/login")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Location Map").classes("text-h5 q-mb-md")
@@ -614,8 +619,8 @@ async def positions_page():
         ui.navigate.to("/login")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Positions").classes("text-h5 q-mb-md")
@@ -725,8 +730,8 @@ async def visits_page():
         ui.navigate.to("/login")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Visits").classes("text-h5 q-mb-md")
@@ -824,8 +829,8 @@ async def places_page():
         ui.navigate.to("/login")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Frequent Places").classes("text-h5 q-mb-md")
@@ -925,8 +930,8 @@ async def settings_page():
         ui.navigate.to("/login")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Settings").classes("text-h5 q-mb-md")
@@ -987,8 +992,8 @@ async def admin_page():
         ui.navigate.to("/")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     with ui.column().classes("q-pa-md w-full"):
         ui.label("Administration").classes("text-h5 q-mb-md")
@@ -1270,8 +1275,8 @@ async def logs_page():
         ui.navigate.to("/")
         return
 
-    _header(user)
-    _nav_drawer(user)
+    drawer = _nav_drawer(user)
+    _header(user, drawer)
 
     LOG_DIR = os.environ.get("LOG_DIR", "/data" if os.path.isdir("/data") else ".")
     LOG_FILE = os.path.join(LOG_DIR, "locationz.log")
